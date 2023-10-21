@@ -10,6 +10,11 @@ gem 'sinatra'
 gem 'sinatra-contrib'
 gem 'sqlite3'
 
+gem 'sorbet-runtime'
+
 group :development do
   gem 'irb'
+  gem 'sorbet'
+  gem 'tapioca', require: false
+  gem "rack-test"
 end

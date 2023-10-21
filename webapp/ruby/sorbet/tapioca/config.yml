@@ -1,0 +1,16 @@
+gem:
+  # Add your `gem` command parameters here:
+  #
+  # exclude:
+  # - gem_name
+  # doc: true
+  # workers: 5
+  workers: 1
+  exclude:
+    - irb
+dsl:
+  # Add your `dsl` command parameters here:
+  #
+  # exclude:
+  # - SomeGeneratorName
+  # workers: 5
