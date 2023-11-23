@@ -1,4 +1,5 @@
 initial_data/*
 webapp/tenant_db/*
+bench/bench
 data/*.db
 *.tar.gz

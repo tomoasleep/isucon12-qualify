@@ -1,4 +1,4 @@
-version: '3.0'
+version: "3.8"
 
 services:
   nginx:
@@ -13,7 +13,8 @@ services:
     restart: always
 
   webapp:
-    build: ./webapp/go
+    build: ./webapp/ruby
+    platform: linux/amd64
     environment:
       ISUCON_DB_HOST: mysql
       ISUCON_DB_PORT: 3306
@@ -25,11 +26,20 @@ services:
       - "3000:3000"
     links:
       - mysql
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./webapp/ruby/
+          target: /home/isucon/webapp/ruby/
+        - action: rebuild
+          path: ./webapp/ruby/Gemfile.lock
     volumes:
-      - ./webapp:/home/isucon/webapp
-      - tenant_db:/home/isucon/webapp/tenant_db
+      # - ./webapp:/home/isucon/webapp
+      - ./webapp/public.pem:/home/isucon/webapp/public.pem
+      - ./webapp/sql:/home/isucon/webapp/sql
+      - ./webapp/tenant_db:/home/isucon/webapp/tenant_db
       - initial_data:/home/isucon/initial_data
-      - gopkg:/home/isucon/go/pkg
+      - bundle:/home/isucon/tmp/ruby/gems
     init: true
     restart: always
 
@@ -47,12 +57,14 @@ services:
 
   blackauth:
     build: ./webapp/go
+    platform: linux/amd64
     ports:
       - "3001:3001"
     init: true
     restart: always
     volumes:
       - .:/home/isucon
+      - gopkg:/home/isucon/go/pkg
     working_dir: /home/isucon/blackauth
     command:
       - /usr/local/go/bin/go
@@ -61,13 +73,14 @@ services:
 
   bench:
     build: ./webapp/go
+    platform: linux/amd64
     stdin_open: true
     tty: true
     environment:
       ISUCON_JWT_KEY_FILE: ./isuports.pem
     volumes:
       - .:/home/isucon
-      - tenant_db:/home/isucon/webapp/tenant_db
+      - ./webapp/tenant_db:/home/isucon/webapp/tenant_db
       - initial_data:/home/isucon/initial_data
       - gopkg:/home/isucon/go/pkg
     network_mode: host
@@ -80,5 +93,5 @@ services:
 volumes:
   mysql:
   gopkg:
-  tenant_db:
+  bundle:
   initial_data:
