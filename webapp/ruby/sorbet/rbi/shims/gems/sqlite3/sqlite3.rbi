@@ -20,6 +20,22 @@ class SQLite3::Database
   }
   def execute(sql, bind_vars = [], *args, &block); end
 
+  # A convenience method for obtaining the first row of a result set, and
+  # discarding all others. It is otherwise identical to #execute.
+  #
+  # See also #get_first_value.
+  #
+  # source://sqlite3//lib/sqlite3/database.rb#357
+  sig {
+    params(
+      sql: String,
+      bind_vars: T.nilable(T::Array[T.untyped]),
+    ).returns(
+      T.nilable(SQLite3::ResultSet::HashWithTypesAndFields)
+    )
+  }
+  def get_first_row(sql, *bind_vars); end
+
   # https://github.com/sparklemotion/sqlite3-ruby/blob/v1.6.7/lib/sqlite3/database.rb#L144-L158
   sig {
     params(
