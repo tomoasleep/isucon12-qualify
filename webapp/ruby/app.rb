@@ -12,8 +12,11 @@ require 'sinatra/base'
 require 'sinatra/cookies'
 require 'sinatra/json'
 require 'sqlite3'
+require 'sorbet-runtime'
 
 require_relative 'sqltrace'
+require_relative 'srbutils'
+require_relative 'request_logging'
 
 module Isuports
   class App < Sinatra::Base
@@ -31,6 +34,8 @@ module Isuports
       cache_control :private
     end
 
+    use RequestLogging, %w(/api/player/competitions /api/organizer/billing)
+
     TENANT_DB_SCHEMA_FILE_PATH = '../sql/tenant/10_schema.sql'
     INITIALIZE_SCRIPT = '../sql/init.sh'
     COOKIE_NAME = 'isuports_session'
@@ -46,15 +51,19 @@ module Isuports
     # アクセスしてきた人の情報
     # Viewer = Struct.new(:role, :player_id, :tenant_name, :tenant_id, keyword_init: true)
     class Viewer < T::Struct
+      include StructLike
+
       prop :role, String
       prop :player_id, String
       prop :tenant_name, String
-      prop :tenant_id, Integer
+      prop :tenant_id, T.nilable(Integer)
     end
 
     # TenantRow = Struct.new(:id, :name, :display_name, :created_at, :updated_at, keyword_init: true)
     class TenantRow < T::Struct
-      prop :id, T.nilable(Integer)
+      include StructLike
+
+      prop :id, T.nilable(Integer), default: nil
       prop :name, String
       prop :display_name, String
       prop :created_at, T.untyped, default: nil
@@ -63,7 +72,9 @@ module Isuports
 
     # PlayerRow = Struct.new(:tenant_id, :id, :display_name, :is_disqualified, :created_at, :updated_at, keyword_init: true)
     class PlayerRow < T::Struct
-      prop :tenant_id, Integer
+      include StructLike
+
+      prop :tenant_id, T.nilable(Integer)
       prop :id, String
       prop :display_name, String
       prop :is_disqualified, T::Boolean
@@ -73,8 +84,10 @@ module Isuports
 
     # CompetitionRow = Struct.new(:tenant_id, :id, :title, :finished_at, :created_at, :updated_at, keyword_init: true)
     class CompetitionRow < T::Struct
-      prop :tenant_id, Integer
-      prop :id, String
+      include StructLike
+
+      prop :tenant_id, T.nilable(Integer)
+      prop :id, T.nilable(String)
       prop :title, String
       prop :finished_at, T.nilable(Integer)
       prop :created_at, Integer
@@ -83,10 +96,12 @@ module Isuports
 
     # PlayerScoreRow = Struct.new(:tenant_id, :id, :player_id, :competition_id, :score, :row_num, :created_at, :updated_at, keyword_init: true)
     class PlayerScoreRow < T::Struct
-      prop :tenant_id, Integer
-      prop :id, String
-      prop :player_id, String
-      prop :competition_id, String
+      include StructLike
+
+      prop :tenant_id, T.nilable(Integer)
+      prop :id, T.nilable(String)
+      prop :player_id, T.nilable(String)
+      prop :competition_id, T.nilable(String)
       prop :score, Integer
       prop :row_num, Integer
       prop :created_at, Integer
@@ -267,7 +282,7 @@ module Isuports
           role:,
           player_id: token.fetch('sub'),
           tenant_name: tenant.name,
-          tenant_id: T.must(tenant.id),
+          tenant_id: tenant.id,
         )
       rescue JWT::DecodeError => e
         raise HttpError.new(401, "#{e.class}: #{e.message}")
@@ -291,7 +306,7 @@ module Isuports
         unless tenant
           raise HttpError.new(401, 'tenant not found')
         end
-        TenantRow.new(tenant)
+        TenantRow.build(tenant)
       end
 
       # 参加者を取得する
@@ -306,7 +321,7 @@ module Isuports
       def retrieve_player(tenant_db, id)
         row = tenant_db.get_first_row('SELECT * FROM player WHERE id = ?', [id])
         if row
-          PlayerRow.new(row).tap do |player|
+          PlayerRow.build(row).tap do |player|
             player.is_disqualified = player.is_disqualified != 0
           end
         else
@@ -338,14 +353,14 @@ module Isuports
       # 大会を取得する
       sig {
         params(
-          tenant_db: T.untyped,
+          tenant_db: TenantDBType,
           id: T.untyped
         ).returns(T.nilable(CompetitionRow))
       }
       def retrieve_competition(tenant_db, id)
         row = tenant_db.get_first_row('SELECT * FROM competition WHERE id = ?', [id])
         if row
-          CompetitionRow.new(row)
+          CompetitionRow.build(row)
         else
           nil
         end
@@ -395,6 +410,8 @@ module Isuports
       # )
 
       class BillingReport < T::Struct
+        include StructLike
+
         prop(:competition_id, String)
         prop(:competition_title, String)
         prop(:player_count, Integer)
@@ -409,7 +426,7 @@ module Isuports
         params(
           tenant_db: TenantDBType,
           tenant_id: Integer,
-          competition_id: Integer,
+          competition_id: String,
         ).returns(BillingReport)
       }
       def billing_report_by_competition(tenant_db, tenant_id, competition_id)
@@ -449,7 +466,7 @@ module Isuports
           end
 
           BillingReport.new(
-            competition_id: comp.id,
+            competition_id: T.must(comp.id),
             competition_title: comp.title,
             player_count:,
             visitor_count:,
@@ -464,12 +481,12 @@ module Isuports
         params(
           v: Viewer,
           tenant_db: TenantDBType,
-        ).void
+        ).returns(String)
       }
       def competitions_handler(v, tenant_db)
         competitions = []
         tenant_db.execute('SELECT * FROM competition WHERE tenant_id=? ORDER BY created_at DESC', [v.tenant_id]) do |row|
-          comp = T.let(CompetitionRow.from_hash(row), CompetitionRow)
+          comp = CompetitionRow.build(row)
           competitions.push({
             id: comp.id,
             title: comp.title,
@@ -557,15 +574,15 @@ module Isuports
       # テナントの課金とする
       tenant_billings = []
       T.must(admin_db.xquery('SELECT * FROM tenant ORDER BY id DESC')).each do |row|
-        t = T.let(TenantRow.from_hash(row), TenantRow)
+        t = TenantRow.build(row)
         if before_id && before_id <= T.must(t.id)
           next
         end
         billing_yen = 0
         connect_to_tenant_db(T.must(t.id)) do |tenant_db|
           tenant_db.execute('SELECT * FROM competition WHERE tenant_id=?', [t.id]) do |row|
-            comp = CompetitionRow.from_hash(row)
-            report = billing_report_by_competition(tenant_db, T.must(t.id), comp.id)
+            comp = CompetitionRow.build(row)
+            report = billing_report_by_competition(tenant_db, T.must(t.id), T.must(comp.id))
             billing_yen += report.billing_yen
           end
         end
@@ -596,12 +613,14 @@ module Isuports
         raise HttpError.new(403, 'role organizer required')
       end
 
-      connect_to_tenant_db(v.tenant_id) do |tenant_db|
+      tenant_id = T.must(v.tenant_id)
+
+      connect_to_tenant_db(tenant_id) do |tenant_db|
         players = []
         tenant_db.execute('SELECT * FROM player WHERE tenant_id=? ORDER BY created_at DESC', [v.tenant_id]) do |row|
-          player = PlayerRow.from_hash(row)
+          player = PlayerRow.build(row)
           player.is_disqualified = player.is_disqualified != 0
-          players.push(player.serialize.slice(:id, :display_name, :is_disqualified))
+          players.push(player.to_h.slice(:id, :display_name, :is_disqualified))
         end
 
         json(
@@ -620,16 +639,18 @@ module Isuports
         raise HttpError.new(403, 'role organizer required')
       end
 
-      connect_to_tenant_db(v.tenant_id) do |tenant_db|
-        display_names = params[:display_name]
+      tenant_id = T.must(v.tenant_id)
+
+      connect_to_tenant_db(tenant_id) do |tenant_db|
+        display_names = T.cast(params[:display_name], T::Array[String])
 
         players = display_names.map do |display_name|
           id = dispense_id
 
           now = Time.now.to_i
           tenant_db.execute('INSERT INTO player (id, tenant_id, display_name, is_disqualified, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)', [id, v.tenant_id, display_name, 0, now, now])
-          player = retrieve_player(tenant_db, id)
-          T.must(player).serialize.slice(:id, :display_name, :is_disqualified)
+          player = T.must(retrieve_player(tenant_db, id))
+          player.to_h.slice(:id, :display_name, :is_disqualified)
         end
 
         json(
@@ -648,7 +669,9 @@ module Isuports
         raise HttpError.new(403, 'role organizer required')
       end
 
-      connect_to_tenant_db(v.tenant_id) do |tenant_db|
+      tenant_id = T.must(v.tenant_id)
+
+      connect_to_tenant_db(tenant_id) do |tenant_db|
         player_id = params[:player_id]
 
         now = Time.now.to_i
@@ -662,7 +685,7 @@ module Isuports
         json(
           status: true,
           data: {
-            player: player.serialize.slice(:id, :display_name, :is_disqualified),
+            player: player.to_h.slice(:id, :display_name, :is_disqualified),
           },
         )
       end
@@ -677,7 +700,9 @@ module Isuports
         raise HttpError.new(403, 'role organizer required')
       end
 
-      connect_to_tenant_db(v.tenant_id) do |tenant_db|
+      tenant_id = T.must(v.tenant_id)
+
+      connect_to_tenant_db(tenant_id) do |tenant_db|
         title = params[:title]
 
         now = Time.now.to_i
@@ -704,7 +729,9 @@ module Isuports
         raise HttpError.new(403, 'role organizer required')
       end
 
-      connect_to_tenant_db(v.tenant_id) do |tenant_db|
+      tenant_id = T.must(v.tenant_id)
+
+      connect_to_tenant_db(tenant_id) do |tenant_db|
         id = params[:competition_id]
         unless retrieve_competition(tenant_db, id)
           # 存在しない大会
@@ -726,7 +753,9 @@ module Isuports
         raise HttpError.new(403, 'role organizer required')
       end
 
-      connect_to_tenant_db(v.tenant_id) do |tenant_db|
+      tenant_id = T.must(v.tenant_id)
+
+      connect_to_tenant_db(tenant_id) do |tenant_db|
         competition_id = params[:competition_id]
         comp = retrieve_competition(tenant_db, competition_id)
         unless comp
@@ -752,7 +781,7 @@ module Isuports
         # DELETEしたタイミングで参照が来ると空っぽのランキングになるのでロックする
         flock_by_tenant_id(v.tenant_id) do
           player_score_rows = csv.map.with_index do |row, row_num|
-            row = T.cast(row, T::Hash[String, T.untyped])
+            row = T.cast(row, CSV::Row)
 
             if row.size != 2
               raise "row must have two columns: #{row}"
@@ -767,7 +796,7 @@ module Isuports
             now = Time.now.to_i
             PlayerScoreRow.new(
               id:,
-              tenant_id: v.tenant_id,
+              tenant_id: tenant_id,
               player_id:,
               competition_id:,
               score:,
@@ -799,11 +828,13 @@ module Isuports
         raise HttpError.new(403, 'role organizer required')
       end
 
-      connect_to_tenant_db(v.tenant_id) do |tenant_db|
+      tenant_id = T.must(v.tenant_id)
+
+      connect_to_tenant_db(tenant_id) do |tenant_db|
         reports = []
         tenant_db.execute('SELECT * FROM competition WHERE tenant_id=? ORDER BY created_at DESC', [v.tenant_id]) do |row|
-          comp = CompetitionRow.from_hash(row)
-          reports.push(billing_report_by_competition(tenant_db, v.tenant_id, comp.id).serialize)
+          comp = CompetitionRow.build(row)
+          reports.push(billing_report_by_competition(tenant_db, tenant_id, T.must(comp.id)).to_h)
         end
         json(
           status: true,
@@ -821,7 +852,9 @@ module Isuports
         raise HttpError.new(403, 'role organizer required')
       end
 
-      connect_to_tenant_db(v.tenant_id) do |tenant_db|
+      tenant_id = T.must(v.tenant_id)
+
+      connect_to_tenant_db(tenant_id) do |tenant_db|
         competitions_handler(v, tenant_db)
       end
     end
@@ -835,7 +868,9 @@ module Isuports
         raise HttpError.new(403, 'role player required')
       end
 
-      connect_to_tenant_db(v.tenant_id) do |tenant_db|
+      tenant_id = T.must(v.tenant_id)
+
+      connect_to_tenant_db(tenant_id) do |tenant_db|
         authorize_player!(tenant_db, v.player_id)
 
         player_id = params[:player_id]
@@ -843,14 +878,14 @@ module Isuports
         unless player
           raise HttpError.new(404, 'player not found')
         end
-        competitions = tenant_db.execute('SELECT * FROM competition WHERE tenant_id = ? ORDER BY created_at ASC', [v.tenant_id]).map { |row| T.let(CompetitionRow.from_hash(row), CompetitionRow) }
+        competitions = tenant_db.execute('SELECT * FROM competition WHERE tenant_id = ? ORDER BY created_at ASC', [v.tenant_id]).map { |row| T.let(CompetitionRow.build(row), CompetitionRow) }
         # player_scoreを読んでいるときに更新が走ると不整合が起こるのでロックを取得する
         flock_by_tenant_id(v.tenant_id) do
           player_score_rows = competitions.filter_map do |c|
             # 最後にCSVに登場したスコアを採用する = row_numが一番大きいもの
             row = tenant_db.get_first_row('SELECT * FROM player_score WHERE tenant_id = ? AND competition_id = ? AND player_id = ? ORDER BY row_num DESC LIMIT 1', [v.tenant_id, c.id, player.id])
             if row
-              PlayerScoreRow.new(row)
+              PlayerScoreRow.build(row)
             else
               # 行がない = スコアが記録されてない
               nil
@@ -868,7 +903,7 @@ module Isuports
           json(
             status: true,
             data: {
-              player: player.serialize.slice(:id, :display_name, :is_disqualified),
+              player: player.to_h.slice(:id, :display_name, :is_disqualified),
               scores:,
             },
           )
@@ -892,7 +927,9 @@ module Isuports
         raise HttpError.new(403, 'role player required')
       end
 
-      connect_to_tenant_db(v.tenant_id) do |tenant_db|
+      tenant_id = T.must(v.tenant_id)
+
+      connect_to_tenant_db(tenant_id) do |tenant_db|
         authorize_player!(tenant_db, v.player_id)
 
         competition_id = params[:competition_id]
@@ -904,7 +941,7 @@ module Isuports
         end
 
         now = Time.now.to_i
-        tenant = TenantRow.new(T.must(admin_db.xquery('SELECT * FROM tenant WHERE id = ?', v.tenant_id)).first)
+        tenant = TenantRow.build(T.must(admin_db.xquery('SELECT * FROM tenant WHERE id = ?', v.tenant_id)).first)
         admin_db.xquery('INSERT INTO visit_history (player_id, tenant_id, competition_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', v.player_id, tenant.id, competition_id, now, now)
 
         rank_after_str = params[:rank_after]
@@ -920,7 +957,7 @@ module Isuports
           ranks = T.let([], T::Array[CompetitionRank])
           scored_player_set = Set.new
           tenant_db.execute('SELECT * FROM player_score WHERE tenant_id = ? AND competition_id = ? ORDER BY row_num DESC', [tenant.id, competition_id]) do |row|
-            ps = T.cast(PlayerScoreRow.from_hash(row), PlayerScoreRow)
+            ps = T.cast(PlayerScoreRow.build(row), PlayerScoreRow)
             # player_scoreが同一player_id内ではrow_numの降順でソートされているので
             # 現れたのが2回目以降のplayer_idはより大きいrow_numでスコアが出ているとみなせる
             if scored_player_set.member?(ps.player_id)
@@ -973,7 +1010,9 @@ module Isuports
         raise HttpError.new(403, 'role player required')
       end
 
-      connect_to_tenant_db(v.tenant_id) do |tenant_db|
+      tenant_id = T.must(v.tenant_id)
+
+      connect_to_tenant_db(tenant_id) do |tenant_db|
         authorize_player!(tenant_db, v.player_id)
         competitions_handler(v, tenant_db)
       end
@@ -991,7 +1030,7 @@ module Isuports
           return json(
             status: true,
             data: {
-              tenant: tenant.serialize.slice(:name, :display_name),
+              tenant: tenant.to_h.slice(:name, :display_name),
               me: nil,
               role: ROLE_NONE,
               logged_in: false,
@@ -1002,21 +1041,23 @@ module Isuports
         json(
           status: true,
           data: {
-            tenant: tenant.serialize.slice(:name, :display_name),
+            tenant: tenant.to_h.slice(:name, :display_name),
             me: nil,
             role: v.role,
             logged_in: true,
           },
         )
       else
-        connect_to_tenant_db(v.tenant_id) do |tenant_db|
+        tenant_id = T.must(v.tenant_id)
+
+        connect_to_tenant_db(tenant_id) do |tenant_db|
           player = retrieve_player(tenant_db, v.player_id)
           if player
             json(
               status: true,
               data: {
-                tenant: tenant.serialize.slice(:name, :display_name),
-                me: player.serialize.slice(:id, :display_name, :is_disqualified),
+                tenant: tenant.to_h.slice(:name, :display_name),
+                me: player.to_h.slice(:id, :display_name, :is_disqualified),
                 role: v.role,
                 logged_in: true,
               },
@@ -1025,7 +1066,7 @@ module Isuports
             json(
               status: true,
               data: {
-                tenant: tenant.serialize.slice(:name, :display_name),
+                tenant: tenant.to_h.slice(:name, :display_name),
                 me: nil,
                 role: ROLE_NONE,
                 logged_in: false,

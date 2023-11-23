@@ -44,7 +44,7 @@ module Sinatra::JSON
     params(
       object: T.untyped,
       options: T.untyped,
-    ).void
+    ).returns(String)
   }
   def json(object, options = T.unsafe(nil)); end
 end
