@@ -1,4 +1,20 @@
-# ISUCON12 予選問題
+# ISUCON12 予選問題 (practice)
+
+## Setup
+
+```console
+$ make -C bench bench
+$ make -C bench benchmarker_tenant.json
+$ docker compose build
+```
+
+## Run with docker compose
+
+```console
+$ docker compose watch
+$ touch webapp/ruby # Trigger sync
+$ docker compose exec bench ./bench
+```
 
 ## ディレクトリ構成
 
