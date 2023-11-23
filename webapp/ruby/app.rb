@@ -128,6 +128,12 @@ module Isuports
       end
     end
 
+    def route_eval
+      Pyroscope.tag_wrapper({ action: env['sinatra.route'] }) do
+        super
+      end
+    end
+
     # エラー処理
     error HttpError do
       e = env['sinatra.error']

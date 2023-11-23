@@ -1,14 +1,14 @@
-FROM public.ecr.aws/docker/library/ruby:3.1.2-bullseye
+FROM public.ecr.aws/docker/library/ruby:3.2.2-bullseye
 
 WORKDIR /tmp
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
   apt-get -y upgrade && \
   apt-get -y install sudo && \
-  curl -sSfLO https://dev.mysql.com/get/mysql-apt-config_0.8.22-1_all.deb && \
-  apt-get -y install ./mysql-apt-config_*_all.deb && \
+  # curl -sSfLO https://dev.mysql.com/get/mysql-apt-config_0.8.22-1_all.deb && \
+  # apt-get -y install ./mysql-apt-config_*_all.deb && \
   apt-get -y update && \
-  apt-get -y install sqlite3 mysql-client
+  apt-get -y install sqlite3 mariadb-client
 
 RUN echo '%sudo ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
 RUN useradd --uid=1001 -G sudo --create-home isucon

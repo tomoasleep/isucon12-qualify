@@ -1,0 +1,30 @@
+server:
+  log_level: debug
+
+metrics:
+  wal_directory: /tmp/wal
+  global:
+    scrape_interval: 60s
+    remote_write:
+    - url: ${AGENT_METRICS_URL}
+      basic_auth:
+        username: ${AGENT_METRICS_USERNAME}
+        password: ${AGENT_METRICS_PASSWORD}
+
+traces:
+  configs:
+  - name: default
+    remote_write:
+      - endpoint: ${AGENT_TEMPO_HOST}
+        basic_auth:
+          username: ${AGENT_TEMPO_USERNAME}
+          password: ${AGENT_TEMPO_PASSWORD}
+    receivers:
+      otlp:
+        protocols:
+          http:
+          grpc:
+
+integrations:
+  agent:
+    enabled: true

@@ -14,7 +14,6 @@ services:
 
   webapp:
     build: ./webapp/ruby
-    platform: linux/amd64
     environment:
       ISUCON_DB_HOST: mysql
       ISUCON_DB_PORT: 3306
@@ -22,6 +21,8 @@ services:
       ISUCON_DB_PASSWORD: isucon
       ISUCON_DB_NAME: isuports
       ISUCON_ADMIN_HOSTNAME: admin.t.isucon.dev
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://grafana-agent:4318/v1/traces
+      OTEL_LOG_LEVEL: debug
     ports:
       - "3000:3000"
     links:
@@ -40,6 +41,8 @@ services:
       - ./webapp/tenant_db:/home/isucon/webapp/tenant_db
       - initial_data:/home/isucon/initial_data
       - bundle:/home/isucon/tmp/ruby/gems
+    env_file:
+      - .env
     init: true
     restart: always
 
@@ -89,6 +92,21 @@ services:
       - "bash"
       - "-c"
       - "sleep infinity"
+
+  grafana-agent:
+    image: grafana/agent:v0.38.0
+    volumes:
+      - ./agent/config:/etc/agent-config
+    entrypoint:
+      - /bin/grafana-agent
+      - run
+      - /etc/agent-config/agent-config.river
+    ports:
+      - "12345:12345"
+    environment:
+      - AGENT_MODE=flow
+    env_file:
+      - .env
 
 volumes:
   mysql:
